@@ -2,13 +2,13 @@
 
 namespace App\Models;
 
+use App\Enums\Strategy\WebDavOption;
 use App\Enums\StrategyKey;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Carbon;
 use Sabre\DAV\Client;
 
@@ -46,19 +46,16 @@ class Strategy extends Model
 
     const DRIVERS = [
         StrategyKey::Local => '本地',
-        StrategyKey::S3 => 'AWS S3',
-        StrategyKey::Oss => '阿里云 OSS',
-        StrategyKey::Cos => '腾讯云 COS',
-        StrategyKey::Kodo => '七牛云 Kodo',
-        StrategyKey::Uss => '又拍云 USS',
-        StrategyKey::Sftp => 'SFTP',
-        StrategyKey::Ftp => 'FTP',
         StrategyKey::Webdav => 'WebDav',
-        StrategyKey::Minio => 'Minio',
     ];
 
+    /**
+     * WebDAV 认证方式。不再提供「Auto」：
+     * 它的 option value 是空字符串，强转成 int 就是 0，而 Sabre 对 0 的处理是
+     * 「显式指定且什么都不做」（CURLOPT_HTTPAUTH = 0），等于匿名请求 —— 接 Cloudreve
+     * 这类必须 Basic 认证的服务会直接 401。默认落到 Basic 最贴合实际。
+     */
     const WEBDAV_AUTH_TYPES = [
-        '' => 'Auto',
         Client::AUTH_BASIC => 'Basic',
         Client::AUTH_DIGEST => 'Digest',
         Client::AUTH_NTLM => 'Ntlm',
@@ -67,38 +64,20 @@ class Strategy extends Model
     protected static function booted()
     {
         static::saving(function (self $strategy) {
-            $strategy->configs['root'] = $strategy->configs->get('root');
-            $strategy->configs['url'] = rtrim($strategy->configs->get('url'), '/');
-            if ($strategy->key == StrategyKey::Local) {
-                $symlink = self::getRootPath($strategy->configs['url']);
-                $target = $strategy->configs['root'] ?: config('filesystems.disks.uploads.root');
-                if (! is_dir(public_path($symlink))) {
-                    (new Filesystem())->link($target, $symlink);
-                }
-                // 是否需要移除旧的符号链接
-                $url = $strategy->getOriginal('configs')['url'] ?? '';
-                if ($url) {
-                    $oldSymlink = self::getRootPath($url);
-                    if ($oldSymlink != $symlink) {
-                        @unlink($oldSymlink);
-                    }
-                }
+            // WebDAV 的两个地址类字段在落库前归一化：base_uri 少了尾斜杠时，Sabre 的
+            // 相对路径解析会把最后一段吃掉（详见 ImageService::makeWebdavAdapter）。
+            if ($strategy->key == StrategyKey::Webdav) {
+                $configs = $strategy->configs ?: collect();
+                $configs['base_uri'] = rtrim((string)$configs->get(WebDavOption::BaseUri), '/').'/';
+                $configs['prefix'] = trim((string)$configs->get(WebDavOption::Prefix), '/');
+                // 认证方式只允许 Basic/Digest/Ntlm，非法值（含历史遗留的空字符串）一律落 Basic。
+                $authType = (int)$configs->get(WebDavOption::AuthType);
+                $configs['auth_type'] = in_array($authType, [Client::AUTH_BASIC, Client::AUTH_DIGEST, Client::AUTH_NTLM], true)
+                    ? $authType
+                    : Client::AUTH_BASIC;
+                $strategy->configs = $configs;
             }
         });
-
-        static::deleted(function (self $strategy) {
-            // 如果是本地策略，删除的时候同时删除符号连接
-            if ($strategy->key === StrategyKey::Local) {
-                $symlink = self::getRootPath($strategy->configs['url']);
-                @unlink(public_path($symlink));
-            }
-        });
-    }
-
-    public static function getRootPath($url): string
-    {
-        $path = (parse_url($url)['path'] ?? '');
-        return current(array_filter(explode('/', $path)));
     }
 
     public function intro(): Attribute

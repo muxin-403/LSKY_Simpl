@@ -9,7 +9,7 @@
             </div>
         </form>
 
-        <x-table :columns="['ID', '名称', '是否默认', '是否为游客组', '图片审核', '原图保护', '水印' ,'用户数量', '策略数量', '操作']">
+        <x-table :columns="['ID', '名称', '是否默认', '是否为游客组', '图片审核', '水印' ,'用户数量', '策略数量', '操作']">
             @foreach($groups as $group)
             <tr data-id="{{ $group->id }}">
                 <td class="px-6 py-4 whitespace-nowrap">{{ $group->id }}</td>
@@ -27,11 +27,6 @@
                 <td class="px-6 py-4 whitespace-nowrap">
                     <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{ $group->configs->get('is_enable_scan') ? 'text-green-500' : 'text-rose-500' }}">
                         <i class="text-lg fas fa-{{ $group->configs->get('is_enable_scan') ? 'check-circle' : 'times-circle' }}"></i>
-                    </span>
-                </td>
-                <td class="px-6 py-4 whitespace-nowrap">
-                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {{ $group->configs->get('is_enable_original_protection') ? 'text-green-500' : 'text-rose-500' }}">
-                        <i class="text-lg fas fa-{{ $group->configs->get('is_enable_original_protection') ? 'check-circle' : 'times-circle' }}"></i>
                     </span>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap">

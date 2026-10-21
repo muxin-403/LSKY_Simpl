@@ -3,13 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Enums\GroupConfigKey;
+use App\Enums\StrategyKey;
 use App\Enums\UserStatus;
 use App\Enums\Watermark\Mode;
 use App\Exceptions\UploadException;
 use App\Http\Result;
 use App\Models\Group;
 use App\Models\Image;
-use App\Models\Strategy;
 use App\Models\User;
 use App\Services\ImageService;
 use App\Utils;
@@ -58,10 +58,6 @@ class Controller extends BaseController
             $item['result'] = extension_loaded(strtolower($item['name']));
             return $item;
         })->push([
-            'name' => 'readlink、symlink 函数',
-            'intro' => '读取、创建符号链接函数',
-            'result' => function_exists('readlink') && function_exists('symlink'),
-        ])->push([
             'name' => 'putenv、getenv 函数',
             'intro' => '设置和获取环境变量函数',
             'result' => function_exists('putenv') && function_exists('getenv'),
@@ -109,8 +105,6 @@ class Controller extends BaseController
                 $user->is_adminer = true;
                 $user->status = UserStatus::Normal;
                 $user->email_verified_at = date('Y-m-d H:i:s');
-                // 设置默认策略组的 url 为当前请求 url
-                Strategy::query()->update(['configs->url' => $request->getSchemeAndHttpHost().'/i']);
                 $user->save();
             } catch (\Throwable $e) {
                 @unlink(base_path('installed.lock'));
@@ -141,65 +135,141 @@ class Controller extends BaseController
         ));
     }
 
-    public function output(Request $request, ImageService $service): StreamedResponse
+    /**
+     * 图片代理输出：`GET /{key}.{extension}` 的唯一处理器。
+     *
+     * 全站图片都走这里（`Image::url()` 恒返回本站地址），所以这条路径是全站最大流量入口。
+     * 两个分支：
+     *  - 需要「完整字节串」时（动态水印重绘 / psd、tif、bmp 转码，以及 WebDAV 开了服务端
+     *    缓存的场景）走 read() + 可选缓存；
+     *  - 其余一律 readStream() + fpassthru 流式输出，避免把整张图读进 PHP 内存
+     *    （默认 memory_limit 只有 64M，一张 100MB 的图足以打爆 worker）。
+     */
+    public function output(Request $request, ImageService $service): Response|StreamedResponse
     {
         /** @var Image $image */
         $image = Image::query()
-            ->with('group')
+            ->with(['group', 'strategy'])
             ->where('key', $request->route('key'))
             ->where('extension', strtolower($request->route('extension')))
             ->firstOr(fn() => abort(404));
-        if (! $image->group?->configs->get(GroupConfigKey::IsEnableOriginalProtection)) {
+
+        // 策略可能已被删除（StrategyController::delete 会把 strategy_id 置 null），
+        // 这种图取不到后端适配器 —— 直接 404，否则 filesystem() 会抛 TypeError（500）。
+        if (is_null($image->strategy) || is_null($image->group)) {
             abort(404);
         }
-        try {
+
+        $extension = $image->extension;
+        $configs = $image->group->configs;
+
+        $headers = $this->imageHeaders($image);
+
+        // 条件请求：ETag 命中直接 304，省掉一次后端读取（Cloudreve 回源是实打实的开销）。
+        if ($request->headers->get('If-None-Match') === $headers['ETag']) {
+            return response('', 304, ['ETag' => $headers['ETag'], 'Cache-Control' => $headers['Cache-Control']]);
+        }
+
+        $mimetype = self::MIME_TYPES[$extension] ?? 'application/octet-stream';
+        $watermarkConfigs = collect($configs->get(GroupConfigKey::WatermarkConfigs));
+
+        $needWatermark = $configs->get(GroupConfigKey::IsEnableWatermark)
+            && $watermarkConfigs->get('mode', Mode::Overlay) == Mode::Dynamic
+            && ! in_array($extension, ['ico', 'gif']);
+        $needTranscode = in_array($extension, ['psd', 'tif', 'bmp']);
+
+        $cacheTtl = (int)$configs->get(GroupConfigKey::ImageCacheTtl, 0);
+        // 只给远端存储做服务端缓存：本地策略直接流式读盘，缓存只会白占一份磁盘。
+        $useCache = $cacheTtl > 0 && $image->strategy->key === StrategyKey::Webdav;
+
+        if ($needWatermark || $needTranscode || $useCache) {
+            // 解码大图是内存大户，与 ImageService::makeThumbnail() 保持同一档位。
+            @ini_set('memory_limit', '512M');
+
             $cacheKey = "image_{$image->key}";
+            $contents = $useCache ? Cache::get($cacheKey) : null;
 
-            if (Cache::has($cacheKey)) {
-                $contents = Cache::get($cacheKey);
-            } else {
-                $contents = $image->filesystem()->read($image->pathname);
-                $configs = collect($image->group?->configs->get(GroupConfigKey::WatermarkConfigs));
+            if (is_null($contents)) {
+                try {
+                    $contents = $image->filesystem()->read($image->pathname);
+                } catch (FilesystemException $e) {
+                    Utils::e($e, '图片输出时出现异常');
+                    abort(404);
+                }
 
-                // 是否启用了水印功能，跳过gif和ico图片
-                if (
-                    $image->group?->configs->get(GroupConfigKey::IsEnableWatermark) &&
-                    $configs->get('mode', Mode::Overlay) == Mode::Dynamic &&
-                    ! in_array($image->extension, ['ico', 'gif'])
-                ) {
-                    $quality = $image->group?->configs->get(GroupConfigKey::ImageSaveQuality, 75);
-                    $contents = $service->stickWatermark($contents, $configs)->encode($image->extension, $quality)->getEncoded();
+                // 水印与转码都放在写缓存**之前**：否则缓存里躺的是原图，每次请求都要
+                // 重新转一次码，缓存等于白做（旧实现的顺序就是反的）。
+                if ($needWatermark) {
+                    $quality = $configs->get(GroupConfigKey::ImageSaveQuality, 75);
+                    $contents = $service->stickWatermark($contents, $watermarkConfigs)
+                        ->encode($extension, $quality)->getEncoded();
                 }
-                $cacheTtl = (int)$image->group?->configs->get(GroupConfigKey::ImageCacheTtl, 0);
-                // 是否启用了缓存
-                if ($cacheTtl) {
-                    Cache::remember($cacheKey, $cacheTtl, fn () => $contents);
-                } else {
-                    if (Cache::has($cacheKey)) Cache::forget($cacheKey);
+
+                if ($needTranscode) {
+                    $contents = InterventionImage::make($contents)->encode('png')->getEncoded();
+                    $mimetype = 'image/png';
                 }
+
+                if ($useCache) {
+                    Cache::put($cacheKey, $contents, $cacheTtl);
+                }
+            } elseif ($needTranscode) {
+                // 缓存里存的已经是转码后的 png
+                $mimetype = 'image/png';
             }
+
+            return response($contents, 200, $headers + ['Content-Type' => $mimetype]);
+        }
+
+        // 流式分支：必须在 return 之前把流打开 —— 远端 401/404 还能 abort(404)，
+        // 放进回调里再抛异常时响应头已经发出去了，只能吐半个文件。
+        try {
+            $stream = $image->filesystem()->readStream($image->pathname);
         } catch (FilesystemException $e) {
             Utils::e($e, '图片输出时出现异常');
             abort(404);
         }
 
-        $mimetype = $image->mimetype;
+        return response()->stream(function () use ($stream) {
+            if (is_resource($stream)) {
+                fpassthru($stream);
+                fclose($stream);
+            }
+        }, 200, $headers + ['Content-Type' => $mimetype]);
+    }
 
-        // ico 图片直接输出，不经过 InterventionImage 处理
-        if (in_array($image->extension, ['ico'])) {
-            goto out;
-        }
+    /**
+     * 扩展名 → Content-Type 白名单。
+     *
+     * 刻意不用库里存的 `mimetype`：同源代理下，一个伪装成 jpg 的 HTML 会变成同源 XSS，
+     * 白名单 + nosniff 才挡得住（扩展名本身还受 routes/image.php 的后缀过滤）。
+     */
+    private const MIME_TYPES = [
+        'jpg' => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'bmp' => 'image/bmp',
+        'ico' => 'image/x-icon',
+        'tif' => 'image/tiff',
+        'tiff' => 'image/tiff',
+        'psd' => 'image/vnd.adobe.photoshop',
+    ];
 
-        // 浏览器无法预览的图片，改为 png 格式输出
-        if (in_array($image->extension, ['psd', 'tif', 'bmp'])) {
-            $mimetype = 'image/png';
-            $contents = InterventionImage::make($contents)->encode('png')->getEncoded();
-        }
-
-        out:
-
-        return \response()->stream(function () use ($contents) {
-            echo $contents;
-        }, headers: ['Content-type' => $mimetype]);
+    /**
+     * 代理响应的缓存头。
+     *
+     * 不能指望路由上的 `cache.headers` 中间件：Laravel 9 的 SetCacheHeaders 在
+     * `! $response->getContent()` 时直接返回，而 StreamedResponse::getContent() 恒为 false
+     * ⇒ 流式响应拿不到任何缓存头。所以这里显式给。
+     */
+    private function imageHeaders(Image $image): array
+    {
+        return [
+            'ETag' => '"'.$image->md5.'"',
+            'Cache-Control' => 'public, max-age=31536000, immutable',
+            'X-Content-Type-Options' => 'nosniff',
+        ];
     }
 }

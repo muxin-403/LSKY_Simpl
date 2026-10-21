@@ -29,7 +29,7 @@
 ![看不见图片请使用科学上网](https://user-images.githubusercontent.com/22728201/157242314-5716d578-fee5-4083-8d91-0d98cb2545d9.png)
 
 ### 📌 TODO
-* [x] 支持`本地`等多种第三方云存储 `AWS S3`、`阿里云 OSS`、`腾讯云 COS`、`七牛云`、`又拍云`、`SFTP`、`FTP`、`WebDav`、`Minio`
+* [x] 存储策略保留 `本地` 与 `WebDav`（其余云存储驱动已移除）；图片统一由本站代理输出，不返回存储后端直链
 * [x] 多种数据库驱动支持，`MySQL 5.7+`、`PostgreSQL 9.6+`、`SQLite 3.8.8+`、`SQL Server 2017+`
 * [x] 支持配置使用多种缓存驱动，`Memcached`、`Redis`、`DynamoDB`、等其他关系型数据库，默认以文件的方式缓存
 * [x] 多图上传、拖拽上传、粘贴上传、动态设置策略上传、复制、一键复制链接

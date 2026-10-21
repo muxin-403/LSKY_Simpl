@@ -9,16 +9,14 @@ name: Build and push image to GHCR
 #     这样自证失败时 latest 仍停在上一个已知可用的镜像，线上拉到的不会是坏版本
 on:
   push:
-    branches:
-      - master
-      # 测试版分支（用来先把改动放上分支验证，master 保持 = 线上稳定版）：
-      # 分支构建**只产出不可变的 sha-<commit> 镜像**，绝不动 :latest ——
-      # 由下面的「Promote verified image to latest」步骤用 `if: … github.ref == 'refs/heads/master'`
-      # 把关（否则分支一推就把线上在用的 latest 顶成测试版）。
-      # 名字就叫 test（2026-10-01 由 test/memory-tuning 改名，避免被当成"测试套件目录"式命名）；
-      # 同时保留 test/* 模式：历史分支名与以后带后缀的测试分支仍能触发构建。
-      - test
-      - 'test/*'
+    # ⚠️ 已停用 push 触发（2026-10-22）：
+    #   本仓库换了 GitHub 账号，这份流水线里硬编码的 IMAGE 仍是 ghcr.io/mole404/lsky-pro-docker
+    #   （第 85 行），推不上去 → 每次 push 都会红一片；它同时还会跑真机自证并按版本号 promote，
+    #   与本仓库的用途不符。push 构建改由 .github/workflows/docker-amd64.yaml 负责。
+    #   branches-ignore 列 '**' = 任何分支都不触发；下面的 paths-ignore 保留，方便将来恢复时直接用。
+    #   如需临时手动跑这份老流水线：Actions → Build and push image to GHCR → Run workflow。
+    branches-ignore:
+      - '**'
     # 只跳过「纯文档改动」的推送（README / LICENSE / .gitignore 这类：不进镜像、也不被构建或自证读取的文件）。
     #
     # 语义（GitHub 官方）：**只有本次推送的所有改动文件都命中下面列表时**才跳过构建；

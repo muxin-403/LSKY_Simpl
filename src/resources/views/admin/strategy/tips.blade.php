@@ -1,3 +1,6 @@
 <p class="bg-brand p-2 mb-2 rounded text-sm text-white">
     <i class="fas fa-exclamation-circle"></i> 一个策略可以关联多个角色组，一个角色组也可以关联多个策略，注意，如果某个组未设置存储策略，那么该角色组下的用户将无法上传图片。
 </p>
+<p class="bg-brand p-2 mb-2 rounded text-sm text-white">
+    <i class="fas fa-info-circle"></i> 存储策略只提供「本地」与「WebDav」两种。所有图片一律由本站代理输出（形如 <code>/ab12cd.jpg</code>），不需要也不会生成存储后端的访问域名。
+</p>

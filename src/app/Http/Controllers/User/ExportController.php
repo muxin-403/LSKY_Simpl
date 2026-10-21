@@ -44,8 +44,8 @@ class ExportController extends Controller
 
     /**
      * 单张图的读取超时（秒）：连接 5s、整次请求 30s。
-     * 导出是长响应，一张图卡在远端就会占住一个 worker —— 交给 S3 客户端的 http 超时兜底
-     * （其它驱动的适配器不接受超时参数，行为与从前一致）。
+     * 导出是长响应，一张图卡在远端就会占住一个 worker —— 交给 WebDAV 客户端（Sabre）的
+     * curl 选项兜底（本地策略是读盘，不涉及超时）。
      */
     private const READ_TIMEOUTS = ['connect_timeout' => 5, 'timeout' => 30];
 

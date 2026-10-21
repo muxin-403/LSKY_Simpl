@@ -24,7 +24,7 @@ return [
     | may even configure multiple disks of the same driver. Defaults have
     | been setup for each driver as an example of the required options.
     |
-    | Supported Drivers: "local", "ftp", "sftp", "s3"
+    | Supported Drivers: "local", "webdav"
     |
     */
 
@@ -35,26 +35,13 @@ return [
             'root' => storage_path('app'),
         ],
 
+        // 本地存储策略的默认落盘位置。
+        // 注意：本 fork 的图片一律经 `/{key}.{ext}` 由 PHP 代理输出，所以这里**不需要**
+        // url（不再有 /i 软链直连），前端拿到的是本站地址。
         'uploads' => [
             'driver' => 'local',
             'root' => storage_path('app/uploads'),
-            'url' => env('APP_URL').'/i',
             'visibility' => 'public',
         ],
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Symbolic Links
-    |--------------------------------------------------------------------------
-    |
-    | Here you may configure the symbolic links that will be created when the
-    | `storage:link` Artisan command is executed. The array keys should be
-    | the locations of the links and the values should be their targets.
-    |
-    */
-
-    'links' => [
-        public_path('i') => storage_path('app/uploads'),
     ],
 ];

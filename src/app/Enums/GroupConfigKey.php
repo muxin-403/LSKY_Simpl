@@ -19,9 +19,6 @@ final class GroupConfigKey
     /** @var string 违规图片审查后动作 */
     const ScannedAction = 'scanned_action';
 
-    /** @var string 是否启用原图保护功能 */
-    const IsEnableOriginalProtection = 'is_enable_original_protection';
-
     /** @var string 上传是否启用水印功能 */
     const IsEnableWatermark = 'is_enable_watermark';
 

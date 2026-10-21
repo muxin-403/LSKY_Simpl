@@ -36,12 +36,15 @@ class InstallSeeder extends Seeder
                 'is_guest' => true,
                 'configs' => config('convention.group'),
             ]);
-            // 创建默认策略
+            // 创建默认策略（图片走本站代理，策略只需要落盘位置这一个字段）
             $group->strategies()->create([
                 'key' => StrategyKey::Local,
                 'name' => '默认本地策略',
                 'intro' => '系统默认的本地策略',
-                'configs' => config('filesystems.disks.uploads'),
+                'configs' => [
+                    'driver' => 'local',
+                    'root' => config('filesystems.disks.uploads.root'),
+                ],
             ]);
         });
     }

@@ -47,7 +47,6 @@ return [
         GroupConfigKey::ConcurrentUploadNum => 3,
         GroupConfigKey::IsEnableScan => 0,
         GroupConfigKey::IsEnableWatermark => 0,
-        GroupConfigKey::IsEnableOriginalProtection => 0,
         GroupConfigKey::ScannedAction => 'mark', // in mark or delete
         GroupConfigKey::ScanConfigs => [
             'driver' => 'tencent',
@@ -113,7 +112,10 @@ return [
         GroupConfigKey::ImageSaveQuality => 100,
         GroupConfigKey::PathNamingRule => '{Y}/{m}/{d}',
         GroupConfigKey::FileNamingRule => '{uniqid}',
-        GroupConfigKey::ImageCacheTtl => 2626560,
+        // fork：图片改为全局代理输出后，缓存从「加速」变成「远端存储的回源垫片」。
+        // 默认关闭（0）—— 本地策略本来就直读磁盘，不值得再用 file 缓存存一份；
+        // 需要给 WebDAV/Cloudreve 提速时，在角色组里按需填秒数开启。
+        GroupConfigKey::ImageCacheTtl => 0,
     ],
     'user' => [
         UserConfigKey::DefaultAlbum => 0,

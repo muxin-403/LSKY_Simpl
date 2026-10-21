@@ -63,7 +63,6 @@ class GroupRequest extends FormRequest
             'configs.scan_configs.drivers.nsfwjs.attr_name' => [$requiredIfReview('nsfwjs'), 'nullable'],
             'configs.scan_configs.drivers.nsfwjs.threshold' => [$requiredIfReview('nsfwjs'), 'nullable', 'integer', 'between:1,100'],
 
-            'configs.is_enable_original_protection' => 'boolean',
             'configs.image_cache_ttl' => 'nullable|numeric',
 
             'configs.is_enable_watermark' => 'boolean',
@@ -140,7 +139,6 @@ class GroupRequest extends FormRequest
             'configs.scan_configs.drivers.nsfwjs.attr_name' => '表单名称',
             'configs.scan_configs.drivers.nsfwjs.threshold' => '阈值',
 
-            'configs.is_enable_original_protection' => '是否启用原图保护功能',
             'configs.image_cache_ttl' => '图片缓存时间',
 
             'configs.is_enable_watermark' => '是否启用水印功能',

@@ -120,16 +120,17 @@ RUN printf '%s\n' \
 # 文件名里不会出现，所以对正常文件名是恒等变换 —— 不改变现有命名结果与链接形态。
 # 批量导出（用户端）也落在这两个文件上：routes/web.php 的 settings 组新增三条导出路由
 # （preview 只查库报体积 / export 流式下载 / result 读本人最近一次结果）；ImageService::getAdapter()
-# 加了可选参数 $httpOptions（S3 的 connect/read 超时）—— 默认空数组 ⇒ 其它调用方行为与从前完全一致。
+# 加了可选参数 $httpOptions（WebDAV 的 curl connect/read 超时）—— 默认空数组 ⇒ 调用方行为与从前完全一致。
+# 注：本 fork 的存储驱动只保留「本地 + WebDav」，$httpOptions 现在只作用于 Sabre 客户端。
 # routes/auth.php 也是有意偏离（F23 防爆破）：给 login / register / forgot-password /
 # confirm-password 四个 POST 端点加了 throttle（详见文件内注释）。它同样被钉住，
 # 改了不更新这行 md5 就构建失败。
 # 这几个文件以后只要被改动（哪怕手滑），构建就会红 —— md5 必须随改动同步更新。
 RUN printf '%s\n' \
-        'dcc6b370414cf329b7902cdd85f33d2f  ./config/convention.php' \
+        '6ed66e9db08d5dc262d3c78b45d5881c  ./config/convention.php' \
         'c3d84e42370fea86239a8a076492a215  ./routes/web.php' \
         'c1ab546f3e7f5237c1d45435171858ce  ./routes/auth.php' \
-        'c0ea82b790494e247de943f75fa5d059  ./app/Services/ImageService.php' \
+        '4f4fbb8eadd575d57fd123eda7f454e0  ./app/Services/ImageService.php' \
     | md5sum -c -
 
 # 有意偏离上游的另一个文件：composer.lock。
@@ -327,8 +328,11 @@ RUN printf '%s\n' \
 
 # ftp 必须**显式**装进运行时镜像：官方 php:8.1 镜像自带 ftp，php:8.3 的没有
 # （2026-09-28 换 8.3 时 CI 实测：builder 阶段 composer install 直接失败，
-#  报 league/flysystem-ftp requires ext-ftp）。它是 Lsky 的 FTP 存储驱动要用的扩展，
-# 不能依赖"从基镜像继承"。CI 里也加了 ftp 的硬断言。
+#  报 league/flysystem-ftp requires ext-ftp）。
+# 注意：本 fork 已删除 FTP 存储驱动（只留本地 + WebDav），但 composer.json 里
+# league/flysystem-ftp 仍未摘除 —— 摘除必须同时重生成 composer.lock（本机无 composer，
+# 只能走 .github/workflows/update-composer-lock.yaml），否则 `composer install --no-dev`
+# 会因 lock 与 json 不一致直接失败。在摘掉依赖之前，这个扩展必须留着。
 #
 # opcache（测试版收紧，先量后改）：原值 memory_consumption=128 / max_accelerated_files=10000。
 #   实测（2026-10-01，真容器内 Apache 进程 opcache_get_status）：

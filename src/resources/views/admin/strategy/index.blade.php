@@ -16,7 +16,7 @@
                 <td class="px-6 py-4 whitespace-nowrap name">{{ $strategy->name }}</td>
                 <td class="px-6 py-4 whitespace-nowrap">
                     <span class="rounded-md bg-sky-500 text-sm text-white py-1 px-4">
-                        {{ \App\Models\Strategy::DRIVERS[$strategy->key] }}
+                        {{ \App\Models\Strategy::DRIVERS[$strategy->key] ?? '未知（'.($strategy->key).'）' }}
                     </span>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap">{{ $strategy->images_count }}</td>

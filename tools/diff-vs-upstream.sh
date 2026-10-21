@@ -307,13 +307,9 @@ src/lang/zh_CN.json
 #   src/README.md
 #       （上游 README 的 TODO 列表里「云储存」「储存策略」→「云存储」「存储策略」）
 src/README.md
-#   src/app/Enums/Strategy/CosOption.php
-#   src/app/Enums/Strategy/OssOption.php
-#       （Bucket 常量上方注释「储存桶名称」→「存储桶名称」）
-src/app/Enums/Strategy/CosOption.php
-src/app/Enums/Strategy/OssOption.php
 #   src/app/Http/Requests/Admin/StrategyRequest.php
 #       （本地策略的校验收尾消息「储存路径不存在 / 储存路径没有写入权限」，以及 S3/COS 的 bucket 字段名）
+#       —— 注：S3/COS 驱动已在 [16] 中整体移除，此条只剩「存储路径」两处措辞
 src/app/Http/Requests/Admin/StrategyRequest.php
 #   src/resources/views/admin/group/tips.blade.php
 #       （「如果你使用第三方储存…」那条黄色提示里的两处）
@@ -349,6 +345,44 @@ src/app/Http/Controllers/Auth/NewPasswordController.php
 src/lang/zh_CN/validation.php
 #   src/lang/zh_CN/zh_CN.json
 src/lang/zh_CN/zh_CN.json
+
+# [16 存储策略裁剪为「本地 + WebDav」，图片改为全局代理输出]
+#     （驱动只剩两种：S3/OSS/COS/Kodo/USS/SFTP/FTP/Minio 的枚举、适配器分支、表单块、校验分支全部删除，
+#      对应 Option 枚举文件一并删除；StrategyKey 保留原数值 Local=1 / Webdav=9 以免历史数据错位。
+#      图片地址恒为本站 /{key}.{ext}：Image::url() 不再拼 configs.url + pathname，
+#      Controller::output() 去掉「原图保护」门禁，改为「需要整串（水印/转码/远端缓存）就 read，
+#      否则 readStream + fpassthru 流式输出」，并自己补 ETag / Cache-Control / 304
+#      （路由上的 cache.headers 中间件对 StreamedResponse 无效）。
+#      因此 configs.url / queries、public/i 软链、GroupConfigKey::IsEnableOriginalProtection
+#      全部失去意义并被移除；本地策略不再需要访问域名，安装向导也不再检测 readlink/symlink。
+#      WebDAV 侧同时修掉两个必然导致「策略保存成功但传不上图」的问题：baseUri 补尾斜杠
+#      （Sabre 的 RFC3986 解析会吃掉最后一段）、auth_type 为空时不传 0（0 会让 curl 完全不认证 → 401）。）
+#   src/app/Enums/StrategyKey.php
+src/app/Enums/StrategyKey.php
+#   src/app/Enums/Strategy/LocalOption.php（只留 Root）
+src/app/Enums/Strategy/LocalOption.php
+#   src/app/Enums/Strategy/WebDavOption.php（去掉 Url）
+src/app/Enums/Strategy/WebDavOption.php
+#   src/app/Models/Strategy.php（DRIVERS 两项、去掉 Auto 认证、删软链钩子与 getRootPath）
+src/app/Models/Strategy.php
+#   src/app/Models/Image.php（url() 恒为 asset(key.ext)）
+src/app/Models/Image.php
+#   src/app/Enums/GroupConfigKey.php（删 IsEnableOriginalProtection）
+src/app/Enums/GroupConfigKey.php
+#   src/config/filesystems.php（uploads 去掉 url、删 links 段）
+src/config/filesystems.php
+#   src/database/seeders/InstallSeeder.php（默认策略 configs 显式给出）
+src/database/seeders/InstallSeeder.php
+#   src/resources/views/admin/strategy/edit.blade.php（删 8 个驱动块与访问域名/queries）
+src/resources/views/admin/strategy/edit.blade.php
+#   src/resources/views/admin/strategy/index.blade.php（驱动名兜底）
+src/resources/views/admin/strategy/index.blade.php
+#   src/resources/views/admin/strategy/tips.blade.php（补代理说明）
+src/resources/views/admin/strategy/tips.blade.php
+#   src/resources/views/admin/group/add.blade.php（原图保护开关 → 图片代理说明）
+src/resources/views/admin/group/add.blade.php
+#   src/resources/views/admin/group/edit.blade.php（同上）
+src/resources/views/admin/group/edit.blade.php
 EOF
 )
 # 去掉注释/空行/行尾空白，得到排序后的文件清单

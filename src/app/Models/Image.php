@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use App\Enums\GroupConfigKey;
 use App\Enums\ImagePermission;
 use App\Services\ImageService;
 use App\Utils;
@@ -295,19 +294,17 @@ class Image extends Model
         return new Attribute(fn() => "{$path}{$this->name}");
     }
 
+    /**
+     * 图片对外地址：一律是本站代理地址 `/{key}.{extension}`，不再生成任何存储后端直链。
+     *
+     * 全局代理是本 fork 的既定策略：WebDAV（Cloudreve 等）根本没有「按路径直出原图」的
+     * 静态地址，`configs.url + pathname` 这种对象存储式拼法对它必然 404；统一交给
+     * Controller::output() 从后端读出来再吐给浏览器，链接才是可靠的。
+     * key 是 6 位随机串（见 generateKey()），所以地址也不可枚举。
+     */
     public function url(): Attribute
     {
-        return new Attribute(function () {
-            // 是否启用原图保护功能
-            if ($this->group?->configs->get(GroupConfigKey::IsEnableOriginalProtection)) {
-                $url = asset("{$this->key}.{$this->extension}");
-            } else {
-                $url = rtrim($this->strategy?->configs->get('url'), '/').'/'.ltrim($this->pathname, '/');
-            }
-
-            // 拼接图片 url
-            return $url.($this->strategy?->configs->get('queries') ?: '');
-        });
+        return new Attribute(fn () => asset("{$this->key}.{$this->extension}"));
     }
 
     public function thumbUrl(): Attribute

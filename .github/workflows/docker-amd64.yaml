@@ -1,0 +1,157 @@
+name: Build linux/amd64 image
+
+# 推送到 master/main（或打 v* 标签）即自动构建 linux/amd64 镜像，产出两种「可用产物」：
+#   1) GHCR 里的镜像 —— 可直接 `docker pull ghcr.io/<owner>/<repo>:latest`；
+#   2) `docker save` 出的 tar.gz —— 下载后 `gunzip -c ... | docker load` 离线导入，
+#      适合没有外网 / 访问不了 ghcr 的服务器与 NAS。
+#
+# 关于平台：本仓库的 Dockerfile 基于 php:8.3-apache 且要装 imagick/redis/pdo_* 等扩展，
+# 固定构建 linux/amd64（部署机是 x86_64）。需要 arm64 时把 PLATFORMS 改成多平台，
+# 并去掉「load + 导出 tar.gz」这两步（多平台镜像无法 --load 进本地 docker）。
+#
+# 为什么不用仓库里原有的 build-image.yaml：那份是原作者自用的发布流水线（推 mole404 的
+# GHCR、跑真机自证、按版本号 promote），在本仓库会因无推送权限必然失败，已停用其 push 触发。
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 只读代码 + 写 packages：推 GHCR 用的就是仓库自带的 GITHUB_TOKEN，不需要配任何 secret
+permissions:
+  contents: read
+  packages: write
+
+# 同一个分支连续推送时，取消上一次未完成的构建，避免排队堆积
+concurrency:
+  group: docker-amd64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLATFORMS: linux/amd64
+
+jobs:
+  build:
+    name: Build & publish (linux/amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # GHCR 的镜像名必须全小写，而仓库名是 LSKY_Simpl —— 这里统一转一次，
+      # 后续步骤通过 step outputs 取用（不依赖 GITHUB_ENV 在表达式里的可见性）。
+      - name: 计算镜像名与短 SHA
+        id: meta
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 设置 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --load：先落到 runner 的本地镜像库，后面才能 docker save / docker push / 冒烟测试。
+      # 构建缓存走 GitHub Actions 缓存（type=gha），第二次起 composer install 那步会快很多。
+      - name: 构建镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          load: true
+          tags: ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short }}
+          build-args: |
+            FORK_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 产物可用性的最低证明：镜像里的 PHP 能跑，且 Dockerfile 里装的关键扩展都在
+      # （清单与 Dockerfile:358 的 install-php-extensions 一致；gd/zip 没装，别写进来）
+      - name: 冒烟测试（PHP 可运行 / 关键扩展存在）
+        run: |
+          set -euo pipefail
+          IMG="${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short }}"
+          docker run --rm --entrypoint php "$IMG" -v
+          docker run --rm --entrypoint php "$IMG" -r '
+            foreach (["pdo_sqlite","pdo_mysql","imagick","bcmath","redis","curl"] as $ext) {
+                if (!extension_loaded($ext)) { fwrite(STDERR, "missing: $ext\n"); exit(1); }
+            }
+            echo "extensions ok\n";
+          '
+
+      - name: 导出镜像 tar.gz（离线产物）
+        run: |
+          set -euo pipefail
+          IMG="${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short }}"
+          out="lsky-amd64-${{ steps.meta.outputs.short }}.tar.gz"
+          docker save "$IMG" | gzip -1 > "$out"
+          echo "ARTIFACT=$out" >> "$GITHUB_ENV"
+          ls -lh "$out"
+
+      - name: 上传镜像产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: lsky-amd64-${{ steps.meta.outputs.short }}
+          path: ${{ env.ARTIFACT }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0   # 上面已经 gzip 过，再压一遍纯属浪费
+
+      - name: 推送 sha 标签到 GHCR
+        run: |
+          set -euo pipefail
+          docker push "${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short }}"
+
+      # 默认分支上的推送同时更新 latest，这样引用方可以固定用 :latest
+      - name: 推送 latest（仅默认分支）
+        if: github.ref_name == github.event.repository.default_branch
+        run: |
+          set -euo pipefail
+          IMG="${{ steps.meta.outputs.image }}"
+          docker tag "$IMG:sha-${{ steps.meta.outputs.short }}" "$IMG:latest"
+          docker push "$IMG:latest"
+
+      - name: 推送版本号标签（仅 v* 标签）
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          IMG="${{ steps.meta.outputs.image }}"
+          docker tag "$IMG:sha-${{ steps.meta.outputs.short }}" "$IMG:${GITHUB_REF_NAME}"
+          docker push "$IMG:${GITHUB_REF_NAME}"
+
+      - name: 写入运行摘要
+        if: always()
+        run: |
+          {
+            echo "## 镜像构建结果"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 结果 | ${{ job.status }} |"
+            echo "| 平台 | \`linux/amd64\` |"
+            echo "| 提交 | \`${{ github.sha }}\` |"
+            echo "| 镜像 | \`${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short }}\` |"
+            echo ""
+            echo "### 在服务器上使用"
+            echo ""
+            echo '```bash'
+            echo "# 方式一：直接拉取（镜像公开后无需登录）"
+            echo "docker pull ${{ steps.meta.outputs.image }}:latest"
+            echo ""
+            echo "# 方式二：用 Actions 里下载的 tar.gz 离线导入"
+            echo "gunzip -c lsky-amd64-${{ steps.meta.outputs.short }}.tar.gz | docker load"
+            echo '```'
+            echo ""
+            echo "> 首次发布后，到 GitHub 的 Packages 页面把该镜像可见性改成 Public，匿名 \`docker pull\` 才能用。"
+          } >> "$GITHUB_STEP_SUMMARY"

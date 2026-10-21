@@ -17,7 +17,7 @@
                     <a data-target="review" href="javascript:void(0)" class="block rounded-t-lg px-3 py-2 bg-surface-3 group-hover:bg-surface">图片审核</a>
                 </li>
                 <li class="group">
-                    <a data-target="protection" href="javascript:void(0)" class="block rounded-t-lg px-3 py-2 bg-surface-3 group-hover:bg-surface">原图保护</a>
+                    <a data-target="protection" href="javascript:void(0)" class="block rounded-t-lg px-3 py-2 bg-surface-3 group-hover:bg-surface">图片代理</a>
                 </li>
                 <li class="group">
                     <a data-target="watermark" href="javascript:void(0)" class="block rounded-t-lg px-3 py-2 bg-surface-3 group-hover:bg-surface">水印配置</a>
@@ -212,21 +212,21 @@
 
                         <div data-tab="protection" class="hidden grid grid-cols-6 gap-6">
                             <div class="col-span-6 mb-4">
-                                <x-fieldset title="原图保护" faq="设置该角色组下的用户上传的图片是否应用原图保护功能，开启后图片<b>不返回直链</b>">
-                                    <x-switch id="configs[is_enable_original_protection]" name="configs[is_enable_original_protection]" value="1"></x-switch>
-                                </x-fieldset>
+                                <p class="bg-brand p-2 rounded text-sm text-white">
+                                    <i class="fas fa-info-circle"></i> 本组图片一律由本站代理输出（地址形如 <code>/ab12cd.jpg</code>），不再返回存储后端的直链。
+                                </p>
                             </div>
 
                             <div class="col-span-6 mb-4">
                                 <label for="configs[image_cache_ttl]" class="block text-sm font-medium text-ink">图片缓存时间(秒)</label>
-                                <x-input type="number" name="configs[image_cache_ttl]" id="configs[image_cache_ttl]" autocomplete="image_cache_ttl" placeholder="请输入受保护图片的缓存时间，不填或填0表示不缓存" value="" />
+                                <x-input type="number" name="configs[image_cache_ttl]" id="configs[image_cache_ttl]" autocomplete="image_cache_ttl" placeholder="远端存储（WebDAV 等）可填秒数做回源缓存，不填或填0表示不缓存" value="" />
                             </div>
                         </div>
 
                         <div data-tab="watermark" class="hidden grid grid-cols-6 gap-6">
                             <p class="mb-3 text-danger text-sm"><i class="fas fa-exclamation"></i> 开启水印功能前请注意考虑图片版权问题。</p>
                             <div class="col-span-6 mb-4">
-                                <x-fieldset title="开启水印" faq="请注意，水印模式为动态生成时，仅在开启了「原图保护」功能的情况下生效。">
+                                <x-fieldset title="开启水印" faq="请注意，水印模式为动态生成时，会在图片被访问时实时绘制（所有图片都由本站代理输出，无需额外开关）。">
                                     <x-switch id="configs[is_enable_watermark]" name="configs[is_enable_watermark]" value="1"></x-switch>
                                 </x-fieldset>
                                 <div class="col-span-6 mt-4 mb-4">

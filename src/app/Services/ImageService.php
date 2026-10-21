@@ -10,15 +10,7 @@ use App\Enums\ImagePermission;
 use App\Enums\Scan\AliyunOption;
 use App\Enums\Scan\NsfwJsOption;
 use App\Enums\Scan\TencentOption;
-use App\Enums\Strategy\CosOption;
-use App\Enums\Strategy\FtpOption;
-use App\Enums\Strategy\KodoOption;
 use App\Enums\Strategy\LocalOption;
-use App\Enums\Strategy\MinioOption;
-use App\Enums\Strategy\OssOption;
-use App\Enums\Strategy\S3Option;
-use App\Enums\Strategy\SftpOption;
-use App\Enums\Strategy\UssOption;
 use App\Enums\Strategy\WebDavOption;
 use App\Enums\StrategyKey;
 use App\Enums\UserConfigKey;
@@ -32,7 +24,6 @@ use App\Models\Image;
 use App\Models\Strategy;
 use App\Models\User;
 use App\Utils;
-use Aws\S3\S3Client;
 use Illuminate\Support\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -45,27 +36,17 @@ use Illuminate\Support\Str;
 use Intervention\Image\Facades\Image as InterventionImage;
 use Intervention\Image\Imagick\Font;
 use Intervention\Image\ImageManager;
-use League\Flysystem\AwsS3V3\AwsS3V3Adapter;
 use League\Flysystem\Filesystem;
 use League\Flysystem\FilesystemAdapter;
 use League\Flysystem\FilesystemException;
-use League\Flysystem\Ftp\FtpAdapter;
-use League\Flysystem\Ftp\FtpConnectionOptions;
 use League\Flysystem\Local\LocalFilesystemAdapter;
-use League\Flysystem\PhpseclibV3\SftpAdapter;
-use League\Flysystem\PhpseclibV3\SftpConnectionProvider;
 use League\Flysystem\WebDAV\WebDAVAdapter;
-use Overtrue\Flysystem\Cos\CosAdapter;
-use Overtrue\Flysystem\Qiniu\QiniuAdapter;
 use Sabre\DAV\Client;
 use TencentCloud\Common\Credential;
 use TencentCloud\Common\Profile\ClientProfile;
 use TencentCloud\Common\Profile\HttpProfile;
 use TencentCloud\Ims\V20201229\ImsClient;
 use TencentCloud\Ims\V20201229\Models\ImageModerationRequest;
-use WispX\Flysystem\Upyun\UpyunAdapter;
-use Zing\Flysystem\Oss\OssAdapter;
-use OSS\OssClient;
 
 class ImageService
 {
@@ -277,9 +258,9 @@ class ImageService
     /**
      * 按策略构造 flysystem 适配器。
      *
-     * $httpOptions 是给「能配超时的驱动」留的口子 —— 当前只落在 S3（AWS SDK 的 http 配置项
-     * connect_timeout / timeout）：批量导出这种长响应里，一张图卡住就会占住一个 worker，
-     * 需要靠超时把它掐掉。传空数组时行为与从前**完全一致**（其它驱动不受影响）。
+     * $httpOptions 是给「能配超时的驱动」留的口子 —— 当前只落在 WebDAV（Sabre 客户端的
+     * curl 选项 connect_timeout / timeout）：批量导出这种长响应里，一张图卡住就会占住一个
+     * worker，需要靠超时把它掐掉。传空数组时行为与从前**完全一致**。
      */
     public function getAdapter(Strategy $strategy, array $httpOptions = []): FilesystemAdapter
     {
@@ -288,85 +269,49 @@ class ImageService
             StrategyKey::Local => new LocalFilesystemAdapter(
                 location: $configs->get(LocalOption::Root) ?: config('filesystems.disks.uploads.root')
             ),
-            StrategyKey::S3 => new AwsS3V3Adapter(
-                client: new S3Client(array_merge([
-                    'credentials' => [
-                        'key'    => $configs->get(S3Option::AccessKeyId),
-                        'secret' => $configs->get(S3Option::SecretAccessKey)
-                    ],
-                    'endpoint' => $configs->get(S3Option::Endpoint),
-                    'region' => $configs->get(S3Option::Region),
-                    'version' => '2006-03-01',
-                ], $httpOptions ? ['http' => $httpOptions] : [])),
-                bucket: $configs->get(S3Option::Bucket),
-            ),
-            StrategyKey::Oss => new OssAdapter(
-                client: new OssClient($configs->get(
-                    OssOption::AccessKeyId),
-                    $configs->get(OssOption::AccessKeySecret),
-                    $configs->get(OssOption::Endpoint),
-                ),
-                bucket: $configs->get(OssOption::Bucket),
-            ),
-            StrategyKey::Cos => new CosAdapter($configs->only([
-                CosOption::AppId, CosOption::SecretId, CosOption::SecretKey, CosOption::Region, CosOption::Bucket,
-            ])->toArray()),
-            StrategyKey::Kodo => new QiniuAdapter(
-                accessKey: $configs->get(KodoOption::AccessKey),
-                secretKey: $configs->get(KodoOption::SecretKey),
-                bucket: $configs->get(KodoOption::Bucket),
-                domain: $configs->get(KodoOption::Url),
-            ),
-            StrategyKey::Uss => new UpyunAdapter(
-                service: $configs->get(UssOption::Service),
-                operator: $configs->get(UssOption::Operator),
-                password: $configs->get(UssOption::Password),
-                domain: $configs->get(UssOption::Url),
-            ),
-            StrategyKey::Sftp => new SftpAdapter(
-                connectionProvider: new SftpConnectionProvider(
-                    host: $configs->get(SftpOption::Host),
-                    username: $configs->get(SftpOption::Username),
-                    password: $configs->get(SftpOption::Password),
-                    privateKey: $configs->get(SftpOption::PrivateKey),
-                    passphrase: (string)$configs->get(SftpOption::Passphrase),
-                    port: (int)$configs->get(SftpOption::Port),
-                    useAgent: (bool)$configs->get(SftpOption::UseAgent)
-                ),
-                root: $configs->get(SftpOption::Root),
-            ),
-            StrategyKey::Ftp => new FtpAdapter(
-                connectionOptions: FtpConnectionOptions::fromArray([
-                    'host' => $configs->get(FtpOption::Host),
-                    'root' => $configs->get(FtpOption::Root),
-                    'port' => (int)$configs->get(FtpOption::Port),
-                    'ssl' => (bool)$configs->get(FtpOption::Ssl),
-                    'username' => $configs->get(FtpOption::Username),
-                    'password' => $configs->get(FtpOption::Password),
-                    'passive' => (bool)$configs->get(FtpOption::Passive),
-                    'timeout' => 30,
-                ]),
-            ),
-            StrategyKey::Webdav => new WebDAVAdapter(new Client(([
-                'baseUri' => $configs->get(WebDavOption::BaseUri),
-                'userName' => $configs->get(WebDavOption::Username),
-                'password' => $configs->get(WebDavOption::Password),
-                'authType' => (int)$configs->get(WebDavOption::AuthType),
-            ])), $configs->get(WebDavOption::Prefix) ?: ''),
-            StrategyKey::Minio => new AwsS3V3Adapter(
-                client: new S3Client([
-                    'credentials' => [
-                        'key'    => $configs->get(MinioOption::AccessKey),
-                        'secret' => $configs->get(MinioOption::SecretKey)
-                    ],
-                    'endpoint' => $configs->get(MinioOption::Endpoint),
-                    'region' => $configs->get(MinioOption::Region),
-                    'version' => '2006-03-01',
-                    'bucket_endpoint' => (bool)$configs->get(MinioOption::BucketEndpoint),
-                ]),
-                bucket: $configs->get(MinioOption::Bucket),
-            ),
+            StrategyKey::Webdav => $this->makeWebdavAdapter($configs, $httpOptions),
+            // 库里若残留已下线驱动的策略（key=2..8/10），这里必须给出明确异常，
+            // 而不是让 match 抛 UnhandledMatchError（后者连 message 都没有）。
+            default => throw new \RuntimeException("不支持的存储策略类型：{$strategy->key}"),
         };
+    }
+
+    /**
+     * 构造 WebDAV 适配器。这里必须兜住三个坑，否则接 Cloudreve（或任何标准 WebDAV 服务）
+     * 都会「策略保存成功但图片传不上去」：
+     *
+     *  1. baseUri 必须以 `/` 结尾。Sabre 用 RFC 3986 的相对解析（Uri\resolve）把
+     *     相对路径拼到基地址上，基地址不带尾斜杠时最后一段会被当成文件名丢掉 ——
+     *     `https://host/dav` + `2026/10/a.jpg` 会变成 `https://host/2026/10/a.jpg`。
+     *     Cloudreve 官方给的地址正好是不带尾斜杠的 `https://域名/dav`。
+     *  2. auth_type 为空时**不能**把 0 传进去。Sabre 用 `isset($settings['authType'])`
+     *     判断，0 也满足 isset，于是 CURLOPT_HTTPAUTH = 0（等价匿名请求），必然 401；
+     *     省略该键才会回退到 CURLAUTH_BASIC|CURLAUTH_DIGEST 自动协商。
+     *  3. prefix 两端斜杠交给 PathPrefixer 处理，这里先 trim 掉，避免库里存进噪音。
+     */
+    private function makeWebdavAdapter(Collection $configs, array $httpOptions = []): WebDAVAdapter
+    {
+        $settings = [
+            'baseUri' => rtrim((string)$configs->get(WebDavOption::BaseUri), '/').'/',
+            'userName' => (string)$configs->get(WebDavOption::Username),
+            'password' => (string)$configs->get(WebDavOption::Password),
+        ];
+
+        if ($authType = (int)$configs->get(WebDavOption::AuthType)) {
+            $settings['authType'] = $authType;
+        }
+
+        $client = new Client($settings);
+        // 远端不可达时 curl 默认会一直等，一个 worker 就这么被占死。
+        $client->addCurlSetting(CURLOPT_CONNECTTIMEOUT, (int)($httpOptions['connect_timeout'] ?? 10));
+        if (! empty($httpOptions['timeout'])) {
+            $client->addCurlSetting(CURLOPT_TIMEOUT, (int)$httpOptions['timeout']);
+        }
+        // 连接建立后长时间没数据（对端假死）也要能自己断开。
+        $client->addCurlSetting(CURLOPT_LOW_SPEED_LIMIT, 1024);
+        $client->addCurlSetting(CURLOPT_LOW_SPEED_TIME, 60);
+
+        return new WebDAVAdapter($client, trim((string)$configs->get(WebDavOption::Prefix), '/'));
     }
 
     /**
