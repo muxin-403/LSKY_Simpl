@@ -89,6 +89,32 @@ pinPairs.forEach(({ md5, file }) => {
     assert(got === md5, `钉住的哈希与文件一致：${file}`, `钉 ${md5.slice(0, 8)}… / 实际 ${got.slice(0, 8)}…`);
 });
 
+/* ── ①b 基镜像安全基线 ─────────────────────────────────────────────────────── */
+// 2026-10-21 PHP 官方发了安全版本（8.3.36）：CVE-2026-109618 / CVE-2026-109619 两个
+// CVSS 9.2 的可未认证 RCE，其中一条**在应用代码执行之前**就能触发，而官方点名的最高风险
+// 形态正是 Apache + mod_php —— 本镜像就是。基镜像是按 digest 钉死的（见 F15），意味着
+// 上游的安全修复**不会自己进来**；这里就守「别把 digest 退回有洞的那一版」。
+section('基镜像安全基线（PHP 8.3.36）');
+{
+    const cli = (DOCKERFILE.match(/^ARG PHP_CLI_IMAGE_DIGEST=(sha256:[0-9a-f]{64})$/m) || [])[1];
+    const apache = (DOCKERFILE.match(/^ARG PHP_APACHE_IMAGE_DIGEST=(sha256:[0-9a-f]{64})$/m) || [])[1];
+    assert(!!cli && !!apache, '两个基镜像 digest 都以 ARG 形式完整给出（64 位 hex）',
+        `cli=${cli} apache=${apache}`);
+    assert(/FROM php:\$\{PHP_VERSION\}-cli-\$\{DEBIAN_RELEASE\}@\$\{PHP_CLI_IMAGE_DIGEST\}/.test(DOCKERFILE)
+        && /FROM php:\$\{PHP_VERSION\}-apache-\$\{DEBIAN_RELEASE\}@\$\{PHP_APACHE_IMAGE_DIGEST\}/.test(DOCKERFILE),
+        '两个 FROM 都仍然带 @digest（只留 tag = 基镜像随上游漂移）');
+
+    // 已知有洞的一版：PHP 8.3.35 的 index digest。退回它们 = 把两个 RCE 又装回镜像里。
+    const vulnerable = {
+        'sha256:4687aec76c4a895b68b91bcd5e48f1ba7a3dea120f6de50bba7e1a93af5372dd': 'php:8.3-cli-bookworm',
+        'sha256:06df07e2e1d72581dde4fd97bc98d2d0b78686fc13d6a041c520da9a6ce73055': 'php:8.3-apache-bookworm',
+    };
+    const hit = [cli, apache].filter((d) => d && vulnerable[d]);
+    assert(hit.length === 0,
+        '基镜像不在 PHP 8.3.35 那一版（CVE-2026-109618 / CVE-2026-109619）',
+        hit.map((d) => `${vulnerable[d]}=${d.slice(0, 20)}…`).join(', '));
+}
+
 /* ── ② CI 纪律 ─────────────────────────────────────────────────────────────── */
 section('CI 纪律（build-image.yaml）');
 assert(/- '\*\.md'/.test(WORKFLOW), "paths-ignore 用的是根目录一级 '*.md'");
@@ -197,7 +223,34 @@ const uiTweaks = fs.readFileSync(path.join(here, 'ui-tweaks.test.mjs'), 'utf8');
 assert(/\[\s*'node_modules',\s*'vendor',\s*'\.git'\s*\]\s*\.includes\(e\.name\)/.test(uiTweaks),
     '仓库遍历里显式跳过了 node_modules / vendor / .git（否则 CI 会扫进依赖树）');
 
-/* ── ⑥ 流水线里真的跑了行为测试 ────────────────────────────────────────────── */
+/* ── ⑥ WebDAV 写入路径（2026-10-22 上传故障的 tripwire）────────────────────── */
+// 那次的病因不是「认证/地址」，而是上游 WebDAVAdapter 把「能不能写」绑在了
+// 「PROPFIND + MKCOL 能不能成功」上：目录类操作一抽风，PUT 根本发不出去，
+// 日志里只有一句不含状态码的 UnableToCreateDirectory，排查绕了一大圈。
+// 所以这里钉住三件事：走的是自己的适配器、它是「先 PUT」、状态码被记进日志。
+section('WebDAV 写入路径（先 PUT、建目录只作兜底）');
+{
+    const ADAPTER = read('app/Support/Webdav/ResilientWebdavAdapter.php');
+    const UTILS = read('app/Utils.php');
+    const imageService = read('app/Services/ImageService.php');
+    // 断言代码而不是注释：适配器的注释里就要提到 createParentDirFor（说明为什么绕开它）
+    const adapterCode = ADAPTER.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+
+    assert(imageService.includes('new ResilientWebdavAdapter('),
+        'ImageService 构造的是 ResilientWebdavAdapter（不是上游 WebDAVAdapter）');
+    assert(!/new WebDAVAdapter\s*\(/.test(imageService),
+        '没有退回上游 WebDAVAdapter —— 它的 upload() 先 createParentDirFor()，MKCOL 一失败 PUT 就发不出去');
+    assert(adapterCode.includes("request('PUT'") && !adapterCode.includes('createParentDirFor'),
+        '适配器直接发 PUT，不再依赖 createParentDirFor（PROPFIND + MKCOL 前置校验）');
+    assert(ADAPTER.includes('404 === $status || 409 === $status') && ADAPTER.includes('ensureParentDirectory'),
+        '404/409 时才补建父目录（Cloudreve 会在 PUT 时自动补齐，标准 WebDAV 才需要 MKCOL）');
+    assert(UTILS.includes("'http_status'") && UTILS.includes("'chain'"),
+        'Utils::e() 记录 http_status 与异常链（状态码原本藏在 previous 里，只看 message 等于没有）');
+    assert(!/config\('app\.debug', false\) \? \$e->getMessage\(\) : '图片上传失败'/.test(imageService),
+        '上传失败不再恒定回落「图片上传失败」（403/507/429 要能分辨）');
+}
+
+/* ── ⑦ 流水线里真的跑了行为测试 ────────────────────────────────────────────── */
 section('CI 行为测试步骤');
 {
     const stepStart = WORKFLOW.indexOf('Behavior tests (jsdom)');

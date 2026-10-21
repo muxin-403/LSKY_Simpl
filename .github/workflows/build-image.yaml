@@ -45,7 +45,7 @@ on:
   #   php:${PHP_VERSION}-cli-${DEBIAN_RELEASE}@${PHP_CLI_IMAGE_DIGEST}。
   #   带 `@digest` 时 **digest 优先、tag 只作装饰** —— 只把 PHP_VERSION 换成 8.2 而
   #   不换 digest，拉到的仍是 8.3 那份内容（见本次实测：8.2-cli 的 tag 配 8.3 的 digest
-  #   解析出来仍是 8.3.35），构建会「成功」但版本不对，随后被 PHP 版本校验判红。
+  #   解析出来仍是 8.3.36），构建会「成功」但版本不对，随后被 PHP 版本校验判红。
   #   所以试构建必须一并给出与新版本匹配的 digest。
   #   这两个输入**可以留空**：留空时 Resolve 步骤会自动按请求的 PHP 版本从 Docker Hub
   #   解析出对应 index digest（正常路径无需手填）；只有在自动解析不可用时才手工指定。
@@ -314,13 +314,13 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm -v "$PWD:/w" -w /w \
-            php:8.3-cli-bookworm@sha256:4687aec76c4a895b68b91bcd5e48f1ba7a3dea120f6de50bba7e1a93af5372dd \
+            php:8.3-cli-bookworm@sha256:50ed8aed255ea67a49f50b9499bf96745dfa247262da83323c18dc1a07a8ee0d \
             bash -c 'set -euo pipefail; { cat src/app/Support/StreamedZipWriter.php; tail -n +2 test/php/zip-writer.test.php; } | php /dev/stdin'
           # 并发占位表（同一账号互斥 / 全局上限 / 心跳过期自愈 / 缓存坏掉时降级）——
           # 这个类原先完全没有自动覆盖，而它管着「同账号两笔导出并行」这种用户可见行为。
           # 桩必须排在类源码之前（类里用的是 Illuminate\Support\Facades\Cache 那套门面）。
           docker run --rm -v "$PWD:/w" -w /w \
-            php:8.3-cli-bookworm@sha256:4687aec76c4a895b68b91bcd5e48f1ba7a3dea120f6de50bba7e1a93af5372dd \
+            php:8.3-cli-bookworm@sha256:50ed8aed255ea67a49f50b9499bf96745dfa247262da83323c18dc1a07a8ee0d \
             bash -c 'set -euo pipefail; { cat test/php/export-concurrency.stubs.php; tail -n +2 src/app/Support/ExportConcurrency.php; tail -n +2 test/php/export-concurrency.test.php; } | php /dev/stdin'
 
       # 说明（本次「Node 20 弃用」清扫的覆盖面）：下面 docker/* 系列与上面的 actions/checkout

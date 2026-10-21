@@ -3,22 +3,115 @@
 namespace App;
 
 use App\Enums\ConfigKey;
+use App\Exceptions\StorageHttpException;
 use App\Models\Config;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Sabre\HTTP\ClientHttpException;
 
 class Utils
 {
+    /**
+     * 记录异常。
+     *
+     * fork：除了 message，还把**异常链**与 **HTTP 状态码**一并写进日志。
+     *
+     * 起因是一次 WebDAV 上传排查：真正的病因（401/403/405/409/429/507）全藏在
+     * `$e->getPrevious()` 里（Sabre 的 ClientHttpException），而这里以前只记
+     * `getMessage()`；上游 `UnableToCreateDirectory` 的文案本身又不含状态码 ——
+     * 于是日志上只有一句「Failed to create directory at: 2026/」，**根本判不出**
+     * 是没权限、路径冲突、被限流还是容量满，只能靠猜。
+     *
+     * 现在：`http_status` 直接给出状态码（拿不到就不写这个键），`chain` 给出
+     * 「本异常 + previous…」的类名与消息，一眼能看出是谁包了谁。
+     */
     public static function e(\Throwable $e, $message = '', $level = 'error')
     {
-        Log::{$level}($message, [
+        $context = [
             'file' => $e->getFile(),
             'line' => $e->getLine(),
             'message' => $e->getMessage(),
+            'chain' => self::exceptionChain($e),
             'trace' => $e->getTraceAsString(),
-        ]);
+        ];
+
+        if (! is_null($status = self::httpStatus($e))) {
+            $context = ['http_status' => $status] + $context;
+        }
+
+        Log::{$level}($message, $context);
+    }
+
+    /**
+     * 从异常链里取 HTTP 状态码（取不到返回 null）。
+     *
+     * 两种来源：Sabre 的 ClientHttpException（4xx/5xx 时由客户端抛出），以及适配器
+     * 自己抛的 StorageHttpException（把「PUT 最终返回几」结构化地带上来）。
+     */
+    public static function httpStatus(\Throwable $e): ?int
+    {
+        foreach (self::walkThrowable($e) as $item) {
+            if (! is_null($status = self::statusOf($item))) {
+                return $status;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 异常链：本异常 + previous…（最多 $limit 层），每层只留「类名 / 消息 / 状态码」。
+     *
+     * @return array<int, array{class: string, message: string, http_status?: int}>
+     */
+    public static function exceptionChain(\Throwable $e, int $limit = 5): array
+    {
+        $chain = [];
+
+        foreach (self::walkThrowable($e, $limit) as $item) {
+            $line = [
+                'class' => get_class($item),
+                'message' => mb_substr($item->getMessage(), 0, 300),
+            ];
+
+            if (! is_null($status = self::statusOf($item))) {
+                $line['http_status'] = $status;
+            }
+
+            $chain[] = $line;
+        }
+
+        return $chain;
+    }
+
+    /**
+     * @return \Generator<int, \Throwable>
+     */
+    private static function walkThrowable(\Throwable $e, int $limit = 5): \Generator
+    {
+        for ($i = 0; $i < $limit; $i++) {
+            yield $e;
+            $e = $e->getPrevious();
+
+            if (is_null($e)) {
+                return;
+            }
+        }
+    }
+
+    private static function statusOf(\Throwable $e): ?int
+    {
+        if ($e instanceof ClientHttpException) {
+            return $e->getHttpStatus();
+        }
+
+        if ($e instanceof StorageHttpException) {
+            return $e->getHttpStatus();
+        }
+
+        return null;
     }
 
     /**

@@ -60,10 +60,18 @@ ARG PHP_EXT_INSTALLER_VERSION=2.12.0
 # CI 已自动化：build-image.yaml 的 Resolve 步骤会按请求的 PHP 版本解析出对应 digest 并覆盖这两个 ARG
 # （也可在 workflow_dispatch 里手工传 php_cli_digest / php_apache_digest）。上面这套手工方法仅用于本地/离线场景。
 # 实测（2026-09-30，Docker Hub Registry API 原始响应头，见提交说明/报告）：
-#   php:8.3-cli-bookworm    -> sha256:4687aec76c4a895b68b91bcd5e48f1ba7a3dea120f6de50bba7e1a93af5372dd
-#   php:8.3-apache-bookworm -> sha256:06df07e2e1d72581dde4fd97bc98d2d0b78686fc13d6a041c520da9a6ce73055
-ARG PHP_CLI_IMAGE_DIGEST=sha256:4687aec76c4a895b68b91bcd5e48f1ba7a3dea120f6de50bba7e1a93af5372dd
-ARG PHP_APACHE_IMAGE_DIGEST=sha256:06df07e2e1d72581dde4fd97bc98d2d0b78686fc13d6a041c520da9a6ce73055
+#   php:8.3-cli-bookworm    -> sha256:4687aec76c4a895b68b91bcd5e48f1ba7a3dea120f6de50bba7e1a93af5372dd（= PHP 8.3.35）
+#   php:8.3-apache-bookworm -> sha256:06df07e2e1d72581dde4fd97bc98d2d0b78686fc13d6a041c520da9a6ce73055（= PHP 8.3.35）
+# 2026-10-22 更新到 PHP 8.3.36（安全版本，修 CVE-2026-109618 / CVE-2026-109619 两个可未认证 RCE 的
+# 漏洞，CVSS 9.2，官方要求立即升级。mod_php 是被点名的最高风险形态，而本镜像正是 Apache + mod_php，
+# 且漏洞可在应用代码执行之前触发 —— 所以这里不是「顺便升级」，是必须升）。
+# 复核方式同上面三步；另可拉 amd64 清单的 config blob 看 `config.Env` 里的 PHP_VERSION 自证版本：
+#   两个基镜像实测 PHP_VERSION=8.3.36，构建时间 2026-10-21T16:00Z。
+#   php:8.3-cli-bookworm    -> sha256:50ed8aed255ea67a49f50b9499bf96745dfa247262da83323c18dc1a07a8ee0d
+#   php:8.3-apache-bookworm -> sha256:d83083423e44f7a9313be424487f7b2dbe5152a8692bba3fe4d17d73f85a676c
+# 注意这两个 digest 是**多架构 index** 的 digest（与上面 9-30 那两条同形），不是单平台清单的。
+ARG PHP_CLI_IMAGE_DIGEST=sha256:50ed8aed255ea67a49f50b9499bf96745dfa247262da83323c18dc1a07a8ee0d
+ARG PHP_APACHE_IMAGE_DIGEST=sha256:d83083423e44f7a9313be424487f7b2dbe5152a8692bba3fe4d17d73f85a676c
 
 FROM php:${PHP_VERSION}-cli-${DEBIAN_RELEASE}@${PHP_CLI_IMAGE_DIGEST} AS build
 
@@ -122,6 +130,9 @@ RUN printf '%s\n' \
 # （preview 只查库报体积 / export 流式下载 / result 读本人最近一次结果）；ImageService::getAdapter()
 # 加了可选参数 $httpOptions（WebDAV 的 curl connect/read 超时）—— 默认空数组 ⇒ 调用方行为与从前完全一致。
 # 注：本 fork 的存储驱动只保留「本地 + WebDav」，$httpOptions 现在只作用于 Sabre 客户端。
+# 2026-10-22 起 WebDAV 写入改为「先 PUT、建目录只作兜底」（app/Support/Webdav/ResilientWebdavAdapter.php，
+# 不再用上游「先 PROPFIND + MKCOL 再 PUT」的顺序），上传失败时也按 HTTP 状态码给出可排错的提示；
+# Utils::e() 一并记录异常链与状态码。改动落在被钉住的 ImageService.php 上，md5 必须同步。
 # routes/auth.php 也是有意偏离（F23 防爆破）：给 login / register / forgot-password /
 # confirm-password 四个 POST 端点加了 throttle（详见文件内注释）。它同样被钉住，
 # 改了不更新这行 md5 就构建失败。
@@ -130,7 +141,7 @@ RUN printf '%s\n' \
         '6ed66e9db08d5dc262d3c78b45d5881c  ./config/convention.php' \
         'c3d84e42370fea86239a8a076492a215  ./routes/web.php' \
         'c1ab546f3e7f5237c1d45435171858ce  ./routes/auth.php' \
-        '4f4fbb8eadd575d57fd123eda7f454e0  ./app/Services/ImageService.php' \
+        '776486a9292a70559b74b8cc982288e2  ./app/Services/ImageService.php' \
     | md5sum -c -
 
 # 有意偏离上游的另一个文件：composer.lock。

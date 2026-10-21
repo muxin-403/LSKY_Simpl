@@ -23,6 +23,7 @@ use App\Models\Group;
 use App\Models\Image;
 use App\Models\Strategy;
 use App\Models\User;
+use App\Support\Webdav\ResilientWebdavAdapter;
 use App\Utils;
 use Illuminate\Support\Carbon;
 use Illuminate\Database\Eloquent\Builder;
@@ -40,6 +41,7 @@ use League\Flysystem\Filesystem;
 use League\Flysystem\FilesystemAdapter;
 use League\Flysystem\FilesystemException;
 use League\Flysystem\Local\LocalFilesystemAdapter;
+use League\Flysystem\UnableToCreateDirectory;
 use League\Flysystem\WebDAV\WebDAVAdapter;
 use Sabre\DAV\Client;
 use TencentCloud\Common\Credential;
@@ -195,7 +197,7 @@ class ImageService
                 $filesystem->writeStream($pathname, $handle);
             } catch (FilesystemException $e) {
                 Utils::e($e, '保存图片时出现异常');
-                throw new UploadException(config('app.debug', false) ? $e->getMessage() : '图片上传失败');
+                throw new UploadException($this->describeUploadFailure($e));
             }
             if (is_resource($handle)) @fclose($handle);
         } else {
@@ -256,6 +258,39 @@ class ImageService
     }
 
     /**
+     * 把「存文件失败」翻译成一句能照着排错的话。
+     *
+     * 以前这里恒定是 `config('app.debug') ? $e->getMessage() : '图片上传失败'` —— 线上
+     * debug 是关的，于是 401/403（密码或权限）、409（路径冲突）、429（限流）、507（容量满）
+     * 在用户眼里全长得一样，排查只能去翻日志。现在按异常链里的 HTTP 状态码分流；
+     * 取不到状态码就退回原来的通用文案 —— 不猜、也不把内部细节漏出去。
+     */
+    protected function describeUploadFailure(\Throwable $e): string
+    {
+        if (config('app.debug', false)) {
+            return $e->getMessage();
+        }
+
+        $status = Utils::httpStatus($e);
+
+        return match (true) {
+            in_array($status, [401, 403], true)
+                => "存储端拒绝访问（HTTP {$status}）：请检查 WebDAV 账号密码，以及该账户对目标目录的写权限",
+            in_array($status, [405, 409], true)
+                => "存储端不允许在当前路径创建目录（HTTP {$status}）：请把存储策略的「路径前缀」改成远端已存在的目录",
+            in_array($status, [423, 429], true)
+                => "存储端暂时拒绝写入（HTTP {$status}，被锁定或限流），请稍后重试",
+            507 === $status
+                => '存储端容量已满（HTTP 507），请清理远端空间后重试',
+            ! is_null($status) && $status >= 500
+                => "存储端异常（HTTP {$status}）：可能是远端存储离线或凭据失效，请检查 Cloudreve 侧状态",
+            $e instanceof UnableToCreateDirectory
+                => '存储端拒绝了创建目录的请求：请确认该 WebDAV 账户对目标目录有写权限（也可能是被限流，稍后重试）',
+            default => '图片上传失败',
+        };
+    }
+
+    /**
      * 按策略构造 flysystem 适配器。
      *
      * $httpOptions 是给「能配超时的驱动」留的口子 —— 当前只落在 WebDAV（Sabre 客户端的
@@ -288,6 +323,9 @@ class ImageService
      *     判断，0 也满足 isset，于是 CURLOPT_HTTPAUTH = 0（等价匿名请求），必然 401；
      *     省略该键才会回退到 CURLAUTH_BASIC|CURLAUTH_DIGEST 自动协商。
      *  3. prefix 两端斜杠交给 PathPrefixer 处理，这里先 trim 掉，避免库里存进噪音。
+     *  4. 用 ResilientWebdavAdapter 而不是上游 WebDAVAdapter：后者「先建目录再 PUT」，
+     *     PROPFIND / MKCOL 一抽风（实测会出现间歇的 404 / MKCOL 409），PUT 就根本发不出去。
+     *     详见 app/Support/Webdav/ResilientWebdavAdapter.php。
      */
     private function makeWebdavAdapter(Collection $configs, array $httpOptions = []): WebDAVAdapter
     {
@@ -311,7 +349,7 @@ class ImageService
         $client->addCurlSetting(CURLOPT_LOW_SPEED_LIMIT, 1024);
         $client->addCurlSetting(CURLOPT_LOW_SPEED_TIME, 60);
 
-        return new WebDAVAdapter($client, trim((string)$configs->get(WebDavOption::Prefix), '/'));
+        return new ResilientWebdavAdapter($client, trim((string)$configs->get(WebDavOption::Prefix), '/'));
     }
 
     /**

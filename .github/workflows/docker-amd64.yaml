@@ -78,11 +78,21 @@ jobs:
 
       # 产物可用性的最低证明：镜像里的 PHP 能跑，且 Dockerfile 里装的关键扩展都在
       # （清单与 Dockerfile:358 的 install-php-extensions 一致；gd/zip 没装，别写进来）
-      - name: 冒烟测试（PHP 可运行 / 关键扩展存在）
+      - name: 冒烟测试（PHP 可运行 / 版本下限 / 关键扩展存在）
         run: |
           set -euo pipefail
           IMG="${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short }}"
           docker run --rm --entrypoint php "$IMG" -v
+          # 版本下限：基镜像是按 digest 钉死的，digest 与 tag 对不上时（例如只改了 PHP_VERSION、
+          # 没换 digest）构建照样成功、产出的却是旧 PHP。8.3.36 是修 CVE-2026-109618 /
+          # CVE-2026-109619（未认证 RCE，mod_php 是高危形态）的最低安全版本，低于它就是发了个带洞的镜像。
+          docker run --rm --entrypoint php "$IMG" -r '
+            if (version_compare(PHP_VERSION, "8.3.36", "<")) {
+                fwrite(STDERR, "PHP " . PHP_VERSION . " < 8.3.36：基镜像 digest 与 tag 不匹配（CVE-2026-109618 / CVE-2026-109619）\n");
+                exit(1);
+            }
+            echo "php " . PHP_VERSION . " ok\n";
+          '
           docker run --rm --entrypoint php "$IMG" -r '
             foreach (["pdo_sqlite","pdo_mysql","imagick","bcmath","redis","curl"] as $ext) {
                 if (!extension_loaded($ext)) { fwrite(STDERR, "missing: $ext\n"); exit(1); }
