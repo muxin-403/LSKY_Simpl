@@ -9,8 +9,31 @@
 
 ---
 
-**本仓库镜像地址：`ghcr.io/mole404/lsky-pro-docker:latest`**  
-**最新版 `3.7.1`**  
+**本仓库镜像地址：`ghcr.io/muxin-403/lsky_simpl:latest`**  
+**最新版 `3.7.2`**  
+
+> 完整版本记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+<details>
+<summary>📢 <b>3.7.2 安全更新 (2026-10-22) — 建议立即升级</b></summary>
+  
+### 更新内容：
+**安全：PHP 运行环境升级到 8.3.36**，修掉两个 CVSS 9.2 的未认证远程代码执行漏洞（`CVE-2026-109618` OOM 时的状态损坏、
+`CVE-2026-109619` 跨请求残留指针）。本镜像使用的 **Apache + mod_php** 正是官方点名的最高风险形态，其中一条利用路径
+在应用代码执行之前就能触发 —— 这次不是可选更新。  
+基镜像按 digest 钉死，已同步换成 8.3.36 的 digest；CI 同时加了「PHP 版本低于 8.3.36 直接判失败」的下限断言，防止
+digest 与 tag 对不上时静默产出旧版本。
+
+**修复：WebDAV 存储（Cloudreve 等）上传必失败**。此前写入走的是「先建目录（PROPFIND + MKCOL）、再 PUT」，而服务端的
+目录类操作会间歇性返回 404/409 —— 于是上传字节根本没发出去，日志里只有一句不含状态码的「建目录失败」。现在改为
+**直接 PUT**，只有 PUT 真的回 404/409 才补建目录再重试，且建目录失败不再等同于上传失败；对 404/408/423/429/5xx
+做有限重试。
+
+**可观测性**：服务端日志补上 `http_status` 与完整异常链（此前状态码藏在 `previous` 里被丢掉）；前端上传失败也按
+状态码给出可排错的提示（账号/权限、路径前缀、限流、容量已满、远端存储异常），不再一律「图片上传失败」。
+
+**文档**：镜像地址修正为本仓库实际产出的 `ghcr.io/muxin-403/lsky_simpl`；新增 `CHANGELOG.md`。
+</details>
 
 <details>
 <summary>📢 <b>3.7.1 修复更新 (2026-10-19)</b></summary>
@@ -125,7 +148,7 @@ Docker Compose（推荐）：
 ```yaml
 services:
   lsky-pro:
-    image: ghcr.io/mole404/lsky-pro-docker:latest
+    image: ghcr.io/muxin-403/lsky_simpl:latest
     container_name: lsky-pro
     restart: unless-stopped
     ports:
@@ -143,7 +166,7 @@ docker run -d --name lsky-pro --restart unless-stopped \
     -p 127.0.0.1:8089:8089 \
     -v "$PWD/lsky-pro/data:/var/www/html" \
     -e WEB_PORT=8089 \
-    ghcr.io/mole404/lsky-pro-docker:latest
+    ghcr.io/muxin-403/lsky_simpl:latest
 ```
 
 容器挂载卷路径可按你的实际情况改（上例是 `$PWD/lsky-pro/data`，`$PWD` 就是你执行命令时所在目录）。  
